@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use fnv::FnvHashSet;
 use fst::raw::{Builder, Fst};
+use fst::{IntoStreamer, Streamer};
 
 use criterion::{
     criterion_group, criterion_main, Bencher, Benchmark, Criterion, Throughput,
@@ -19,6 +20,7 @@ const WIKI_URLS: &str = include_str!("../../data/wiki-urls-100000");
 fn all(c: &mut Criterion) {
     build(c);
     search(c);
+    iter(c);
 }
 
 fn build(c: &mut Criterion) {
@@ -150,6 +152,43 @@ fn get_words_outputs() -> Vec<(String, u64)> {
 
 fn get_keys(s: &str) -> Vec<String> {
     s.lines().map(str::to_owned).collect()
+}
+
+fn iter(c: &mut Criterion) {
+    let lists = &[("words", WORDS_BIG), ("wikiurls", WIKI_URLS)];
+
+    for &(name, list) in lists {
+        let group = format!("iter/{}", name);
+        define(c, &group, "fst/stream", move |b| {
+            let keys = get_keys(list);
+            let total: usize = keys.iter().map(|k| k.len()).sum();
+            let set = fst::Set::from_iter(&keys).unwrap();
+            b.iter(|| {
+                let mut stream = set.stream();
+                let mut n = 0;
+                while let Some(key) = stream.next() {
+                    n += key.len();
+                }
+                assert_eq!(n, total);
+            });
+        });
+    }
+    for &(name, list) in lists {
+        let group = format!("iter/{}", name);
+        define(c, &group, "fst/range", move |b| {
+            let keys = get_keys(list);
+            let total: usize = keys.iter().map(|k| k.len()).sum();
+            let set = fst::Set::from_iter(&keys).unwrap();
+            b.iter(|| {
+                let mut stream = set.range().into_stream();
+                let mut n = 0;
+                while let Some(key) = stream.next() {
+                    n += key.len();
+                }
+                assert_eq!(n, total);
+            });
+        });
+    }
 }
 
 fn define(
