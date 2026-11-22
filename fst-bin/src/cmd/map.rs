@@ -62,8 +62,7 @@ impl Args {
     }
 
     fn run_sorted(&self) -> Result<(), Error> {
-        let wtr = util::get_buf_writer(Some(&self.output))?;
-        let mut map = MapBuilder::new(wtr)?;
+        let mut map = MapBuilder::create(&self.output)?;
         for input in &self.input {
             let mut rdr = csv::ReaderBuilder::new()
                 .has_headers(false)
@@ -73,7 +72,7 @@ impl Args {
                 map.insert(key, val)?;
             }
         }
-        map.finish().map_err(From::from)
+        map.persist().map_err(From::from)
     }
 
     fn run_unsorted(&self) -> Result<(), Error> {

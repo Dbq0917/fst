@@ -2,6 +2,7 @@ use std::io;
 
 use crate::bytes;
 use crate::error::Result;
+use crate::persist::AtomicFile;
 use crate::raw::counting_writer::CountingWriter;
 use crate::raw::error::Error;
 use crate::raw::registry::{Registry, RegistryEntry};
@@ -107,6 +108,37 @@ impl Builder<Vec<u8>> {
     #[inline]
     pub fn into_fst(self) -> Fst<Vec<u8>> {
         self.into_inner().and_then(Fst::new).unwrap()
+    }
+}
+
+impl Builder<io::BufWriter<AtomicFile>> {
+    /// Create a builder that streams the fst to a temporary file and, on
+    /// [`persist`](Builder::persist), atomically publishes it at `path`.
+    ///
+    /// This is the bounded-memory way to build a persistent fst: the
+    /// builder's working set (the registry and the unfinished-node stack) is
+    /// a fixed size independent of the number of keys, while the encoded
+    /// nodes stream through a buffered writer straight to disk. The
+    /// destination path is only touched once the whole fst has been written
+    /// and fsynced, via an atomic rename, so a concurrent reader never sees a
+    /// half-written file.
+    pub fn create<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> Result<Builder<io::BufWriter<AtomicFile>>> {
+        let wtr = io::BufWriter::new(AtomicFile::create(path)?);
+        Builder::new(wtr)
+    }
+
+    /// Finish building, flush and fsync the temporary file and atomically
+    /// rename it onto the destination path.
+    ///
+    /// If construction fails partway through, the builder is dropped before
+    /// this method is called and the temporary file is removed without
+    /// modifying any pre-existing file at the destination.
+    pub fn persist(self) -> Result<()> {
+        let wtr = self.into_inner()?;
+        let atomic = wtr.into_inner().map_err(|err| err.into_error())?;
+        atomic.persist()
     }
 }
 

@@ -1,6 +1,6 @@
 use std::cmp;
 use std::env;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -102,9 +102,8 @@ where
 
         // Nothing? Create an empty FST and be done with it.
         if results.is_empty() {
-            let wtr = io::BufWriter::new(File::create(&self.output)?);
-            let builder = raw::Builder::new(wtr)?;
-            builder.finish()?;
+            let builder = raw::Builder::create(&self.output)?;
+            builder.persist()?;
             return Ok(());
         }
 
@@ -127,7 +126,13 @@ where
             gen += 1;
         }
         assert_eq!(results.len(), 1);
-        fs::copy(results.pop().unwrap()?, &self.output)?;
+        // Publish the winning FST with an atomic rename so that a reader
+        // opening the output never observes a truncated or half-copied file.
+        let winner = results.pop().unwrap()?;
+        let atomic = fst::AtomicFile::create(&self.output)?;
+        let mut atomic = io::BufWriter::new(atomic);
+        io::copy(&mut File::open(&winner)?, &mut atomic)?;
+        atomic.into_inner().map_err(|err| err.into_error())?.persist()?;
         if self.keep_tmp_dir {
             drop(tmp_dir.into_path());
         }

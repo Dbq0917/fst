@@ -35,8 +35,7 @@ impl Args {
             );
         }
 
-        let wtr = util::get_buf_writer(Some(&self.output))?;
-        let mut merged = fst::SetBuilder::new(wtr)?;
+        let mut merged = fst::SetBuilder::create(&self.output)?;
 
         let mut sets = vec![];
         for set_path in &self.input {
@@ -45,7 +44,7 @@ impl Args {
         }
         let union = sets.iter().collect::<fst::set::OpBuilder>().union();
         merged.extend_stream(union)?;
-        merged.finish()?;
+        merged.persist()?;
         Ok(())
     }
 }

@@ -318,8 +318,12 @@ mod inner_automaton;
 mod inner_map;
 #[path = "set.rs"]
 mod inner_set;
+#[path = "persist.rs"]
+mod persist;
 pub mod raw;
 mod stream;
+
+pub use crate::persist::AtomicFile;
 
 /// Automaton implementations for finite state transducers.
 ///

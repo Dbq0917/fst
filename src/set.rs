@@ -5,6 +5,7 @@ use std::iter::{self, FromIterator};
 use crate::automaton::{AlwaysMatch, Automaton};
 use crate::raw;
 use crate::stream::{IntoStreamer, Streamer};
+use crate::AtomicFile;
 use crate::Result;
 
 /// Set is a lexicographically ordered set of byte strings.
@@ -561,6 +562,28 @@ impl SetBuilder<Vec<u8>> {
     #[inline]
     pub fn into_set(self) -> Set<Vec<u8>> {
         Set(self.0.into_fst())
+    }
+}
+
+impl SetBuilder<io::BufWriter<AtomicFile>> {
+    /// Create a builder that streams the set to a temporary file.
+    ///
+    /// The builder's heap usage stays bounded regardless of how many keys
+    /// are inserted, because the encoded set is streamed straight to disk.
+    /// Calling [`persist`](SetBuilder::persist) finishes the set, fsyncs it
+    /// and atomically renames the temporary file onto `path`, so a reader
+    /// never observes a partially written set. If the build is abandoned,
+    /// the temporary file is cleaned up and `path` is left untouched.
+    pub fn create<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> Result<SetBuilder<io::BufWriter<AtomicFile>>> {
+        raw::Builder::create(path).map(SetBuilder)
+    }
+
+    /// Finish building, fsync the temporary file and atomically publish it
+    /// at the destination path.
+    pub fn persist(self) -> Result<()> {
+        self.0.persist()
     }
 }
 

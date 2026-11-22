@@ -6,6 +6,7 @@ use crate::automaton::{AlwaysMatch, Automaton};
 use crate::raw;
 pub use crate::raw::IndexedValue;
 use crate::stream::{IntoStreamer, Streamer};
+use crate::AtomicFile;
 use crate::Result;
 
 /// Map is a lexicographically ordered map from byte strings to integers.
@@ -619,6 +620,29 @@ impl MapBuilder<Vec<u8>> {
     #[inline]
     pub fn into_map(self) -> Map<Vec<u8>> {
         Map(self.0.into_fst())
+    }
+}
+
+impl MapBuilder<io::BufWriter<AtomicFile>> {
+    /// Create a builder that streams the map to a temporary file.
+    ///
+    /// The builder's heap usage stays bounded regardless of how many
+    /// key-value pairs are inserted, because the encoded map is streamed
+    /// straight to disk. Calling [`persist`](MapBuilder::persist) finishes
+    /// the map, fsyncs it and atomically renames the temporary file onto
+    /// `path`, so a reader never observes a partially written map. If the
+    /// build is abandoned, the temporary file is cleaned up and `path` is
+    /// left untouched.
+    pub fn create<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> Result<MapBuilder<io::BufWriter<AtomicFile>>> {
+        raw::Builder::create(path).map(MapBuilder)
+    }
+
+    /// Finish building, fsync the temporary file and atomically publish it
+    /// at the destination path.
+    pub fn persist(self) -> Result<()> {
+        self.0.persist()
     }
 }
 

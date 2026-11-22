@@ -58,8 +58,11 @@ impl Args {
     }
 
     fn run_sorted(&self) -> Result<(), Error> {
-        let wtr = util::get_buf_writer(Some(&self.output))?;
-        let mut set = SetBuilder::new(wtr)?;
+        // Stream straight to a temporary file and atomically rename it into
+        // place once the whole FST is written and fsynced. This keeps build
+        // memory bounded and guarantees that a reader opening `output`
+        // never sees a half-written transducer.
+        let mut set = SetBuilder::create(&self.output)?;
         for input in &self.input {
             let mut rdr = util::get_buf_reader(Some(input))?;
             rdr.for_byte_line(|line| {
@@ -71,7 +74,7 @@ impl Args {
                 Ok(true)
             })?;
         }
-        set.finish().map_err(From::from)
+        set.persist().map_err(From::from)
     }
 
     fn run_unsorted(&self) -> Result<(), Error> {

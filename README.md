@@ -69,6 +69,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Check out the documentation for a lot more examples!
 
 
+### Building large indexes without growing memory
+
+`SetBuilder::memory` (and `Set::from_iter`) accumulate the whole encoded
+transducer on the heap, so peak memory grows with the data. For large
+indexes, stream the build to a file instead. The builder keeps a fixed-size
+working set (the registry and the unfinished-node stack) regardless of how
+many keys are inserted, and `persist` writes everything to a temporary file
+and atomically renames it over the destination once the build is complete
+and fsynced. A reader opening the destination therefore only ever sees a
+complete transducer, never a half-written one, and a build that fails
+midway leaves the previous file untouched:
+
+```rust,ignore
+use fst::SetBuilder;
+
+let mut builder = SetBuilder::create("index.fst")?;
+for key in read_sorted_keys() {
+    builder.insert(key)?;
+}
+builder.persist()?; // fsync + atomic rename
+# Ok::<(), Box<dyn std::error::Error>>(())
+# fn read_sorted_keys() -> impl IntoIterator<Item = String> {
+#     Vec::<String>::new()
+# }
+```
+
+`MapBuilder::create`/`MapBuilder::persist` provide the same construction
+path for maps, and `fst::AtomicFile` exposes the temporary-file-plus-rename
+writer for use with a raw `raw::Builder`.
+
+
 ### Cargo features
 
 * `levenshtein` - **Disabled** by default. This adds the `Levenshtein`
