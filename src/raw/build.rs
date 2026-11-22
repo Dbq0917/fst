@@ -18,10 +18,10 @@ use crate::stream::{IntoStreamer, Streamer};
 /// that make it a bit unique from what you might expect:
 ///
 /// 1. All keys must be added in lexicographic order. Adding a key out of order
-///    will result in an error. Additionally, adding a duplicate key with an
-///    output value will also result in an error. That is, once a key is
+///    will result in an error. Adding a duplicate key is not an error, but
+///    only the first occurrence of a key is kept. That is, once a key is
 ///    associated with a value, that association can never be modified or
-///    deleted.
+///    deleted, and the values of any subsequent duplicates are ignored.
 /// 2. The representation of an fst is streamed to *any* `io::Write` as it is
 ///    built. For an in memory representation, this can be a `Vec<u8>`.
 ///
@@ -142,7 +142,9 @@ impl<W: io::Write> Builder<W> {
     where
         B: AsRef<[u8]>,
     {
-        self.check_last_key(bs.as_ref(), false)?;
+        if self.check_last_key(bs.as_ref())? {
+            return Ok(());
+        }
         self.insert_output(bs, None)
     }
 
@@ -152,14 +154,18 @@ impl<W: io::Write> Builder<W> {
     /// is a restriction of the current implementation of finite state
     /// transducers. (Values may one day be expanded to other types.)
     ///
-    /// If a key is inserted that is less than or equal to any previous key
-    /// added, then an error is returned. Similarly, if there was a problem
-    /// writing to the underlying writer, an error is returned.
+    /// If a key is inserted that is less than any previous key added, then
+    /// an error is returned. If the key is equal to the previous key added,
+    /// then it is a duplicate: it is silently ignored and the value from
+    /// the first occurrence of the key is kept. Similarly, if there was a
+    /// problem writing to the underlying writer, an error is returned.
     pub fn insert<B>(&mut self, bs: B, val: u64) -> Result<()>
     where
         B: AsRef<[u8]>,
     {
-        self.check_last_key(bs.as_ref(), true)?;
+        if self.check_last_key(bs.as_ref())? {
+            return Ok(());
+        }
         self.insert_output(bs, Some(Output::new(val)))
     }
 
@@ -168,9 +174,10 @@ impl<W: io::Write> Builder<W> {
     /// If an error occurred while adding an element, processing is stopped
     /// and the error is returned.
     ///
-    /// If a key is inserted that is less than or equal to any previous key
-    /// added, then an error is returned. Similarly, if there was a problem
-    /// writing to the underlying writer, an error is returned.
+    /// If a key is inserted that is less than any previous key added, then
+    /// an error is returned. Duplicate keys are silently ignored and keep
+    /// the value from their first occurrence. Similarly, if there was a
+    /// problem writing to the underlying writer, an error is returned.
     pub fn extend_iter<T, I>(&mut self, iter: I) -> Result<()>
     where
         T: AsRef<[u8]>,
@@ -187,9 +194,10 @@ impl<W: io::Write> Builder<W> {
     /// Note that unlike `extend_iter`, this is not generic on the items in
     /// the stream.
     ///
-    /// If a key is inserted that is less than or equal to any previous key
-    /// added, then an error is returned. Similarly, if there was a problem
-    /// writing to the underlying writer, an error is returned.
+    /// If a key is inserted that is less than any previous key added, then
+    /// an error is returned. Duplicate keys are silently ignored and keep
+    /// the value from their first occurrence. Similarly, if there was a
+    /// problem writing to the underlying writer, an error is returned.
     pub fn extend_stream<'f, I, S>(&mut self, stream: I) -> Result<()>
     where
         I: for<'a> IntoStreamer<'a, Into = S, Item = (&'a [u8], Output)>,
@@ -292,10 +300,14 @@ impl<W: io::Write> Builder<W> {
         Ok(self.last_addr)
     }
 
-    fn check_last_key(&mut self, bs: &[u8], check_dupe: bool) -> Result<()> {
+    /// Checks that `bs` is greater than or equal to the last key added.
+    ///
+    /// Returns true if and only if `bs` is a duplicate of the last key
+    /// added. Returns an error if `bs` is less than the last key added.
+    fn check_last_key(&mut self, bs: &[u8]) -> Result<bool> {
         if let Some(ref mut last) = self.last {
-            if check_dupe && bs == &**last {
-                return Err(Error::DuplicateKey { got: bs.to_vec() }.into());
+            if bs == &**last {
+                return Ok(true);
             }
             if bs < &**last {
                 return Err(Error::OutOfOrder {
@@ -311,7 +323,7 @@ impl<W: io::Write> Builder<W> {
         } else {
             self.last = Some(bs.to_vec());
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Gets a reference to the underlying writer.

@@ -14,12 +14,13 @@ where
     let mut ss: Vec<Vec<u8>> =
         ss.into_iter().map(|s| s.as_ref().to_vec()).collect();
     ss.sort();
-    ss.dedup();
+    let mut deduped = ss.clone();
+    deduped.dedup();
     for s in ss.iter().into_iter() {
         bfst.add(s).unwrap();
     }
     let fst = bfst.into_fst();
-    assert_eq!(fst.len(), ss.len());
+    assert_eq!(fst.len(), deduped.len());
     fst
 }
 
@@ -31,8 +32,9 @@ where
     let mut bfst = Builder::memory();
     let mut ss: Vec<(Vec<u8>, u64)> =
         ss.into_iter().map(|(s, o)| (s.as_ref().to_vec(), o)).collect();
-    ss.sort();
-    ss.dedup();
+    // Sort by key only. The sort is stable, so duplicate keys keep their
+    // original relative order and are fed to the builder as-is.
+    ss.sort_by(|&(ref k1, _), &(ref k2, _)| k1.cmp(k2));
     for (s, o) in ss.into_iter() {
         bfst.insert(s, o).unwrap();
     }
@@ -121,16 +123,22 @@ macro_rules! test_map {
     ($name:ident, $($s:expr, $o:expr),+) => {
         #[test]
         fn $name() {
-            let fst = fst_map(vec![$(($s, $o)),*]);
+            let items = vec![$(($s, $o)),*];
+            let fst = fst_map(items.clone());
+            // The builder keeps the value from the first occurrence of
+            // a duplicate key.
+            let mut expected = items.clone();
+            expected.sort_by(|a, b| a.0.cmp(b.0));
+            expected.dedup_by_key(|item| item.0);
             let mut rdr = fst.stream();
-            $({
-                let (s, o) = rdr.next().unwrap();
-                assert_eq!((s, o.value()), ($s.as_bytes(), $o));
-            })*
+            for &(s, o) in &expected {
+                let (got_s, got_o) = rdr.next().unwrap();
+                assert_eq!((got_s, got_o.value()), (s.as_bytes(), o));
+            }
             assert_eq!(rdr.next(), None);
-            $({
-                assert_eq!(fst.get($s.as_bytes()), Some(Output::new($o)));
-            })*
+            for &(s, o) in &expected {
+                assert_eq!(fst.get(s.as_bytes()), Some(Output::new(o)));
+            }
         }
     }
 }
@@ -171,11 +179,69 @@ test_map!(
 );
 test_map!(fst_map_many3, "a", 1, "ab", 0, "abc", 0);
 
-test_map_fail!(fst_map_dupe_empty, "", 0, "", 0);
-test_map_fail!(fst_map_dupe1, "a", 0, "a", 0);
-test_map_fail!(fst_map_dupe2, "a", 0, "b", 0, "b", 0);
+test_map!(fst_map_dupe_empty, "", 0, "", 100);
+test_map!(fst_map_dupe1, "a", 1, "a", 2);
+test_map!(fst_map_dupe2, "a", 1, "b", 2, "b", 3);
+test_map!(fst_map_dupe3, "a", 1, "ab", 2, "ab", 3, "abc", 4);
+test_map!(fst_map_dupe4, "ab", 1, "ab", 2, "ab", 3, "b", 4);
 test_map_fail!(fst_map_order1, "b", 0, "a", 0);
 test_map_fail!(fst_map_order2, "a", 0, "b", 0, "c", 0, "a", 0);
+
+#[test]
+fn fst_map_dupe_first_write_wins() {
+    let mut bfst = Builder::memory();
+    bfst.insert("a", 1).unwrap();
+    bfst.insert("a", 2).unwrap();
+    bfst.insert("a", 3).unwrap();
+    bfst.insert("b", 4).unwrap();
+    bfst.insert("b", 5).unwrap();
+    let fst = bfst.into_fst();
+    assert_eq!(fst.len(), 2);
+    assert_eq!(fst.get("a"), Some(Output::new(1)));
+    assert_eq!(fst.get("b"), Some(Output::new(4)));
+    assert_eq!(
+        fst_inputs_outputs(&fst),
+        vec![(b"a".to_vec(), 1), (b"b".to_vec(), 4)]
+    );
+}
+
+#[test]
+fn fst_map_dupe_rebuild_is_identical() {
+    let items: Vec<(&str, u64)> = vec![
+        ("a", 1),
+        ("a", 2),
+        ("ab", 3),
+        ("ab", 4),
+        ("abc", 5),
+        ("b", 6),
+        ("b", 7),
+        ("z", 8),
+        ("z", 9),
+    ];
+    let build = || {
+        let mut bfst = Builder::memory();
+        for &(k, v) in &items {
+            bfst.insert(k, v).unwrap();
+        }
+        bfst.into_inner().unwrap()
+    };
+    let bytes1 = build();
+    let bytes2 = build();
+    assert_eq!(bytes1, bytes2);
+
+    let fst = Fst::new(bytes1).unwrap();
+    assert_eq!(fst.len(), 5);
+    assert_eq!(
+        fst_inputs_outputs(&fst),
+        vec![
+            (b"a".to_vec(), 1),
+            (b"ab".to_vec(), 3),
+            (b"abc".to_vec(), 5),
+            (b"b".to_vec(), 6),
+            (b"z".to_vec(), 8),
+        ]
+    );
+}
 
 #[test]
 fn fst_map_100000_increments() {
@@ -198,6 +264,26 @@ fn fst_map_100000_lengths() {
         .map(|s| (s.as_bytes().to_vec(), s.len() as u64))
         .collect();
     let fst = fst_map(words.clone());
+    assert_eq!(words, fst_inputs_outputs(&fst));
+    for &(ref word, out) in &words {
+        assert_eq!(fst.get(word), Some(Output::new(out)));
+    }
+}
+
+#[test]
+fn fst_map_100000_dupes() {
+    let words: Vec<(Vec<u8>, u64)> = TEXT
+        .lines()
+        .enumerate()
+        .map(|(i, s)| (s.as_bytes().to_vec(), i as u64))
+        .collect();
+    let mut dupes = Vec::with_capacity(2 * words.len());
+    for &(ref word, out) in &words {
+        dupes.push((word.clone(), out));
+        // The duplicate's value must be ignored.
+        dupes.push((word.clone(), out.wrapping_add(1 << 32)));
+    }
+    let fst = fst_map(dupes);
     assert_eq!(words, fst_inputs_outputs(&fst));
     for &(ref word, out) in &words {
         assert_eq!(fst.get(word), Some(Output::new(out)));

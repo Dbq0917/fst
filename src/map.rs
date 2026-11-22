@@ -37,9 +37,11 @@ use crate::Result;
 /// finite state transducer. The principal difference between them is that
 /// sets always have their output values set to `0`. This has an impact on the
 /// representation size and is reflected in the type system for convenience.
-/// A secondary but subtle difference is that duplicate keys can be added
-/// to a set, but it is an error to do so with maps. That is, a set can have
-/// the same key added sequentially, but a map can't.
+/// A secondary but subtle difference is how duplicate keys are treated.
+/// Adding the same key twice to a set is harmless, since every key maps to
+/// the same output (`0`). For maps, adding a duplicate key keeps the value
+/// from the first occurrence of the key; the values of any subsequent
+/// duplicates are ignored.
 ///
 /// # The future
 ///
@@ -58,8 +60,10 @@ impl Map<Vec<u8>> {
     /// Create a `Map` from an iterator of lexicographically ordered byte
     /// strings and associated values.
     ///
-    /// If the iterator does not yield unique keys in lexicographic order, then
-    /// an error is returned.
+    /// If the iterator does not yield keys in lexicographic order, then an
+    /// error is returned. If the iterator yields the same key more than once
+    /// in a row, then the value from its first occurrence is used and the
+    /// values of the duplicates are ignored.
     ///
     /// Note that this is a convenience function to build a map in memory.
     /// To build a map that streams to an arbitrary `io::Write`, use
@@ -517,9 +521,10 @@ impl<'m, 'a, D: AsRef<[u8]>> IntoStreamer<'a> for &'m Map<D> {
 /// that make it a bit unique from what you might expect:
 ///
 /// 1. All keys must be added in lexicographic order. Adding a key out of order
-///    will result in an error. Additionally, adding a duplicate key will also
-///    result in an error. That is, once a key is associated with a value,
-///    that association can never be modified or deleted.
+///    will result in an error. Adding a duplicate key is not an error, but
+///    only the first occurrence of a key is kept. That is, once a key is
+///    associated with a value, that association can never be modified or
+///    deleted, and the values of any subsequent duplicates are ignored.
 /// 2. The representation of a map is streamed to *any* `io::Write` as it is
 ///    built. For an in memory representation, this can be a `Vec<u8>`.
 ///
@@ -635,9 +640,10 @@ impl<W: io::Write> MapBuilder<W> {
     /// is a restriction of the current implementation of finite state
     /// transducers. (Values may one day be expanded to other types.)
     ///
-    /// If a key is inserted that is less than or equal to any previous key
-    /// added, then an error is returned. Similarly, if there was a problem
-    /// writing to the underlying writer, an error is returned.
+    /// If a key is inserted that is less than any previous key added, then
+    /// an error is returned. Duplicate keys are silently ignored and keep
+    /// the value from their first occurrence. Similarly, if there was a
+    /// problem writing to the underlying writer, an error is returned.
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K, val: u64) -> Result<()> {
         self.0.insert(key, val)
     }
@@ -647,9 +653,10 @@ impl<W: io::Write> MapBuilder<W> {
     /// If an error occurred while adding an element, processing is stopped
     /// and the error is returned.
     ///
-    /// If a key is inserted that is less than or equal to any previous key
-    /// added, then an error is returned. Similarly, if there was a problem
-    /// writing to the underlying writer, an error is returned.
+    /// If a key is inserted that is less than any previous key added, then
+    /// an error is returned. Duplicate keys are silently ignored and keep
+    /// the value from their first occurrence. Similarly, if there was a
+    /// problem writing to the underlying writer, an error is returned.
     pub fn extend_iter<K, I>(&mut self, iter: I) -> Result<()>
     where
         K: AsRef<[u8]>,
@@ -665,9 +672,10 @@ impl<W: io::Write> MapBuilder<W> {
     /// Note that unlike `extend_iter`, this is not generic on the items in
     /// the stream.
     ///
-    /// If a key is inserted that is less than or equal to any previous key
-    /// added, then an error is returned. Similarly, if there was a problem
-    /// writing to the underlying writer, an error is returned.
+    /// If a key is inserted that is less than any previous key added, then
+    /// an error is returned. Duplicate keys are silently ignored and keep
+    /// the value from their first occurrence. Similarly, if there was a
+    /// problem writing to the underlying writer, an error is returned.
     pub fn extend_stream<'f, I, S>(&mut self, stream: I) -> Result<()>
     where
         I: for<'a> IntoStreamer<'a, Into = S, Item = (&'a [u8], u64)>,

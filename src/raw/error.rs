@@ -45,8 +45,11 @@ pub enum Error {
     /// that does not have a checksum, as is the case for all FSTs generated
     /// by this crate before version `0.4`.
     ChecksumMissing,
-    /// A duplicate key was inserted into a finite state transducer, which is
-    /// not allowed.
+    /// A duplicate key was inserted into a finite state transducer.
+    ///
+    /// This is no longer returned by this crate: inserting a duplicate key
+    /// is not an error, and the value from the first occurrence of the key
+    /// is kept. This variant is retained for backward compatibility.
     DuplicateKey {
         /// The duplicate key.
         got: Vec<u8>,
