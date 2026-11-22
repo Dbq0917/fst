@@ -29,14 +29,14 @@ use crate::stream::{IntoStreamer, Streamer};
 /// constructed *without storing the entire fst in memory*. Namely, since it
 /// works with any `io::Write`, it can be streamed directly to a file.
 ///
-/// With that said, the builder does use memory, but **memory usage is bounded
-/// to a constant size**. The amount of memory used trades off with the
-/// compression ratio. Currently, the implementation hard codes this trade off
-/// which can result in about 5-20MB of heap usage during construction. (N.B.
-/// Guaranteeing a maximal compression ratio requires memory proportional to
-/// the size of the fst, which defeats some of the benefit of streaming
-/// it to disk. In practice, a small bounded amount of memory achieves
-/// close-to-minimal compression ratios.)
+/// With that said, the builder does use memory, but **memory usage is
+/// bounded**. The amount of memory used trades off with the compression
+/// ratio: the node cache grows with the size of the working set (the number
+/// of distinct nodes compiled), but is capped by a fixed memory budget
+/// (currently about 64MB). (N.B. Guaranteeing a maximal compression ratio
+/// requires memory proportional to the size of the fst, which defeats some
+/// of the benefit of streaming it to disk. In practice, a bounded amount of
+/// memory achieves close-to-minimal compression ratios.)
 ///
 /// The algorithmic complexity of fst construction is `O(n)` where `n` is the
 /// number of elements added to the fst.
@@ -111,6 +111,16 @@ impl Builder<Vec<u8>> {
 }
 
 impl<W: io::Write> Builder<W> {
+    /// The initial number of rows in the node registry's hash table. The
+    /// registry grows from here as the working set grows.
+    const REGISTRY_INITIAL_TABLE_SIZE: usize = 16;
+    /// The number of cells in each row of the node registry's hash table.
+    const REGISTRY_MRU_SIZE: usize = 2;
+    /// An approximate cap on the total number of bytes used by the node
+    /// registry. This bounds the memory used during construction while
+    /// still permitting the cache to grow with the working set.
+    const REGISTRY_MAX_BYTES: usize = 64 * (1 << 20);
+
     /// Create a builder that builds an fst by writing it to `wtr` in a
     /// streaming fashion.
     pub fn new(wtr: W) -> Result<Builder<W>> {
@@ -130,7 +140,11 @@ impl<W: io::Write> Builder<W> {
         Ok(Builder {
             wtr,
             unfinished: UnfinishedNodes::new(),
-            registry: Registry::new(10_000, 2),
+            registry: Registry::with_max_bytes(
+                Self::REGISTRY_INITIAL_TABLE_SIZE,
+                Self::REGISTRY_MRU_SIZE,
+                Self::REGISTRY_MAX_BYTES,
+            ),
             last: None,
             last_addr: NONE_ADDRESS,
             len: 0,
